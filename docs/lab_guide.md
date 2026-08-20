@@ -115,3 +115,34 @@ Mỗi nhóm trả lời 2 câu:
 
 1. Case nào nên dùng multi-agent? Vì sao?
 2. Case nào không nên dùng multi-agent? Vì sao?
+
+### Trả lời
+
+**1. Nên dùng multi-agent khi task có thể decompose thành các sub-task cần loại thông tin
+hoặc loại kiểm chứng khác nhau, và verification độc lập thực sự tạo giá trị.**
+
+Ví dụ trong repo này: câu hỏi "Research GraphRAG state-of-the-art and write a 500-word
+summary" cần (a) thu thập nhiều nguồn, (b) so sánh/đánh giá độ tin cậy giữa các nguồn, (c)
+viết lại có trích dẫn — ba năng lực khác nhau. Tách Researcher/Analyst/Writer cho phép mỗi
+agent có prompt và trách nhiệm hẹp, dễ debug (`state.trace`, `state.agent_results` cho biết
+agent nào tốn bao nhiêu token, bao lâu), và Critic có thể kiểm tra citation coverage độc lập
+với Writer thay vì tự chấm bài của chính nó. Lý do cốt lõi (theo corpus offline, topic 01,
+article A01/A07): multi-agent "defensible" khi task decomposition tạo ra evidence hoặc
+verification path *độc lập*, không phải chỉ vì task "nghe có vẻ phức tạp". Các case cụ thể
+nên dùng: research report tổng hợp nhiều nguồn mâu thuẫn nhau, task cần fact-check tách biệt
+khỏi generation, hoặc task có nhiều sub-câu hỏi độc lập có thể xử lý song song.
+
+**2. Không nên dùng multi-agent khi task ngắn, có một đường thông tin rõ ràng, và output có
+thể verify rẻ.**
+
+Ví dụ: một câu hỏi factual đơn giản trả lời được trực tiếp từ 1-2 tài liệu đã có sẵn, hoặc
+một yêu cầu tóm tắt ngắn không cần trích dẫn nhiều nguồn. Trong benchmark của repo, baseline
+(1 LLM call) thường có latency thấp hơn nhiều so với multi-agent (4 LLM call: researcher →
+analyst → writer → critic không gọi LLM nhưng vẫn thêm 1 supervisor hop), trong khi chất
+lượng không tăng tương ứng nếu câu hỏi không thực sự cần so sánh nguồn. Corpus offline (case
+study CASE-01-B, "Simple task where orchestration loses") mô tả đúng hiện tượng này: pipeline
+nhiều agent lặp lại cùng một source extract và tốn phần lớn thời gian cho handoff/synthesis
+thay vì tạo thêm giá trị. Coordination có chi phí thật (latency, token, độ phức tạp khi
+debug); nếu không có failure mode cụ thể mà multi-agent giải quyết được, baseline đơn giản là
+lựa chọn đúng — đây cũng là nguyên tắc "quy tắc quan trọng" đầu bài: *không thêm agent nếu
+không có lý do rõ ràng.*

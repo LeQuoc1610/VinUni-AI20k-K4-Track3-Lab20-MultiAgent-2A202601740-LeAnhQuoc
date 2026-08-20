@@ -4,10 +4,7 @@ from multi_agent_research_lab.core.schemas import BenchmarkMetrics
 
 
 def render_markdown_report(metrics: list[BenchmarkMetrics]) -> str:
-    """Render benchmark metrics to markdown.
-
-    TODO(student): Add richer analysis, examples, screenshots, and trace links.
-    """
+    """Render benchmark metrics to a markdown table plus an observed-failure-modes section."""
 
     lines = [
         "# Benchmark Report",
@@ -20,8 +17,16 @@ def render_markdown_report(metrics: list[BenchmarkMetrics]) -> str:
         quality = "" if item.quality_score is None else f"{item.quality_score:.1f}"
         citation = "" if item.citation_coverage is None else f"{item.citation_coverage:.0%}"
         failure = "" if item.failure_rate is None else f"{item.failure_rate:.0%}"
+        notes = item.notes.replace("|", "/") if item.notes else ""
         lines.append(
             f"| {item.run_name} | {item.latency_seconds:.2f} | {cost} | {quality} "
-            f"| {citation} | {failure} | {item.notes} |"
+            f"| {citation} | {failure} | {notes} |"
         )
+
+    flagged = [item for item in metrics if item.notes]
+    if flagged:
+        lines += ["", "## Observed failure modes", ""]
+        for item in flagged:
+            lines.append(f"- **{item.run_name}**: {item.notes}")
+
     return "\n".join(lines) + "\n"
