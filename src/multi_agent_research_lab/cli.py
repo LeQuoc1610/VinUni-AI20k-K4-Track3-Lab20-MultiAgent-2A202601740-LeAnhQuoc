@@ -115,7 +115,10 @@ def multi_agent(
     _init()
     state = ResearchState(request=_parse_query(query))
     result = MultiAgentWorkflow().run(state)
-    console.print(result.model_dump_json(indent=2))
+    # Plain print, not console.print: Rich soft-wraps long lines at terminal width, which
+    # would corrupt this JSON (embed literal newlines inside string values) for anyone
+    # piping/parsing the output.
+    print(result.model_dump_json(indent=2))
 
 
 @app.command()

@@ -91,11 +91,17 @@ class MultiAgentWorkflow:
         return self._compiled
 
     def run(self, state: ResearchState) -> ResearchState:
-        """Compile (if needed), invoke the graph, and convert the result back to ResearchState."""
+        """Compile (if needed), invoke the graph, and convert the result back to ResearchState.
+
+        The whole run is wrapped in one root `trace_span` so every per-agent span opened
+        inside `_safe_run` nests under it, giving one coherent trace per end-to-end run
+        instead of disconnected top-level spans in the LangSmith UI.
+        """
 
         compiled = self._compiled or self.build()
         settings = get_settings()
         # Headroom beyond max_iterations: each logical step is a supervisor hop + a worker hop.
         recursion_limit = settings.max_iterations * 2 + 6
-        result = compiled.invoke(state, config={"recursion_limit": recursion_limit})
+        with trace_span("workflow.multi_agent_run", {"query": state.request.query}):
+            result = compiled.invoke(state, config={"recursion_limit": recursion_limit})
         return ResearchState.model_validate(result)

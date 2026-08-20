@@ -4,18 +4,22 @@ This file intentionally avoids binding to one provider. Students can plug in Lan
 Langfuse, OpenTelemetry, or simple JSON traces.
 
 Every span is always recorded locally (into the returned dict, and via `ResearchState.trace`
-by callers). When `LANGSMITH_API_KEY` is configured, spans are also forwarded to LangSmith so
-they show up in its trace UI. Tracing must never break the pipeline: any provider error is
-swallowed and logged.
+by callers). When `LANGSMITH_API_KEY` is configured, spans are also forwarded to LangSmith.
+Spans nest automatically: a `trace_span` opened while another is still active becomes its
+child, so one end-to-end workflow run shows up in the LangSmith UI as a single expandable
+trace tree (supervisor -> researcher -> supervisor -> analyst -> ...) instead of disconnected
+top-level runs. Tracing must never break the pipeline: any provider error is swallowed and
+logged.
 """
+
+from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from contextvars import ContextVar
 from time import perf_counter
 from typing import Any
-from uuid import uuid4
 
 from multi_agent_research_lab.core.config import get_settings
 
@@ -23,13 +27,16 @@ logger = logging.getLogger(__name__)
 
 try:
     from langsmith import Client as LangSmithClient
+    from langsmith.run_trees import RunTree
 except ImportError:  # pragma: no cover - langsmith is an optional "llm" extra
     LangSmithClient = None  # type: ignore[assignment,misc]
+    RunTree = None  # type: ignore[assignment,misc]
 
-_client_cache: dict[str, "LangSmithClient"] = {}
+_client_cache: dict[str, LangSmithClient] = {}
+_current_run: ContextVar[RunTree | None] = ContextVar("_current_run", default=None)
 
 
-def _get_langsmith_client() -> "LangSmithClient | None":
+def _get_langsmith_client() -> LangSmithClient | None:
     settings = get_settings()
     if LangSmithClient is None or not settings.langsmith_api_key:
         return None
@@ -51,21 +58,27 @@ def trace_span(name: str, attributes: dict[str, Any] | None = None) -> Iterator[
     started = perf_counter()
     span: dict[str, Any] = {"name": name, "attributes": attributes or {}, "duration_seconds": None}
 
+    run: RunTree | None = None
+    token = None
     client = _get_langsmith_client()
-    run_id = uuid4()
-    if client is not None:
+    if client is not None and RunTree is not None:
         try:
-            client.create_run(
-                name=name,
-                run_type="chain",
-                inputs=attributes or {},
-                id=run_id,
-                project_name=settings.langsmith_project,
-                start_time=datetime.now(UTC),
-            )
+            parent = _current_run.get()
+            if parent is not None:
+                run = parent.create_child(name=name, run_type="chain", inputs=attributes or {})
+            else:
+                run = RunTree(
+                    name=name,
+                    run_type="chain",
+                    inputs=attributes or {},
+                    project_name=settings.langsmith_project,
+                    ls_client=client,
+                )
+            run.post()
+            token = _current_run.set(run)
         except Exception as exc:  # pragma: no cover - tracing must never break the pipeline
-            logger.warning("LangSmith create_run failed, continuing without tracing: %s", exc)
-            client = None
+            logger.warning("LangSmith span start failed, continuing without tracing: %s", exc)
+            run = None
 
     error: BaseException | None = None
     try:
@@ -75,13 +88,15 @@ def trace_span(name: str, attributes: dict[str, Any] | None = None) -> Iterator[
         raise
     finally:
         span["duration_seconds"] = perf_counter() - started
-        if client is not None:
+        if run is not None:
             try:
-                client.update_run(
-                    run_id,
+                run.end(
                     outputs={"duration_seconds": span["duration_seconds"]},
                     error=repr(error) if error else None,
-                    end_time=datetime.now(UTC),
                 )
+                run.patch()
             except Exception as exc:  # pragma: no cover
-                logger.warning("LangSmith update_run failed: %s", exc)
+                logger.warning("LangSmith span end failed: %s", exc)
+            finally:
+                if token is not None:
+                    _current_run.reset(token)
